@@ -1,0 +1,161 @@
+/*
+  This program reads the angles and heading from the accelerometer, gyroscope
+  and compass on a BerryIMU v3 connected to a Teensy 4.1.
+  
+  http://ozzmaker.com/
+*/
+
+#include <Wire.h>
+
+// BerryIMU v3 I2C Addresses
+#define LSM6DSL_ADDRESS    0x6A // Accel & Gyro
+#define LIS3MDL_ADDRESS    0x1C // Magnetometer
+
+// LSM6DSL Registers (Accel & Gyro)
+#define LSM6DSL_WHO_AM_I   0x0F
+#define LSM6DSL_CTRL1_XL   0x10 // Accel control
+#define LSM6DSL_CTRL2_G    0x11 // Gyro control
+#define LSM6DSL_OUTX_L_G   0x22 // Gyro output start
+#define LSM6DSL_OUTX_L_XL  0x28 // Accel output start
+
+// LIS3MDL Registers (Magnetometer)
+#define LIS3MDL_WHO_AM_I   0x0F
+#define LIS3MDL_CTRL_REG1  0x20
+#define LIS3MDL_CTRL_REG2  0x21
+#define LIS3MDL_CTRL_REG3  0x22
+#define LIS3MDL_CTRL_REG4  0x23
+#define LIS3MDL_OUTX_L     0x28 // Mag output start
+
+#define DT      0.02    // Loop time E.g 0.02 = 20 milliseconds
+#define AA      0.80    // Complementary filter constant
+#define G_GAIN  0.070   // [deg/s/LSB] for +/- 2000 dps sensitivity
+
+byte buff[6];
+int accRaw[3];
+int magRaw[3];
+int gyrRaw[3];
+float rate_gyr_y = 0.0;     // [deg/s]
+float rate_gyr_x = 0.0;     // [deg/s]
+float rate_gyr_z = 0.0;     // [deg/s]
+float gyroXangle = 0.0;
+float gyroYangle = 0.0;
+float gyroZangle = 0.0;
+float AccYangle = 0.0;
+float AccXangle = 0.0;
+float CFangleX = 0.0;
+float CFangleY = 0.0;
+
+unsigned long startTime;
+
+void setup() {
+  while(!Serial);
+  Serial.begin(115200);
+  
+  Wire.begin();           
+  Wire.setClock(400000);  
+
+  // Enable LSM6DSL Accelerometer (104 Hz ODR, +/-2g scale)
+  writeTo(LSM6DSL_ADDRESS, LSM6DSL_CTRL1_XL, 0b01000000);
+
+  // Enable LSM6DSL Gyroscope (104 Hz ODR, 2000 dps scale)
+  writeTo(LSM6DSL_ADDRESS, LSM6DSL_CTRL2_G, 0b01001100);
+
+  writeTo(LIS3MDL_ADDRESS, LIS3MDL_CTRL_REG1, 0b01111100);
+  writeTo(LIS3MDL_ADDRESS, LIS3MDL_CTRL_REG2, 0b00000000);
+  writeTo(LIS3MDL_ADDRESS, LIS3MDL_CTRL_REG3, 0b00000000);
+  writeTo(LIS3MDL_ADDRESS, LIS3MDL_CTRL_REG4, 0b00001100);
+}
+
+void loop() {
+  startTime = millis();
+
+  // Read accelerometer (LSM6DSL)
+  readFrom(LSM6DSL_ADDRESS, LSM6DSL_OUTX_L_XL, 6, buff);
+  accRaw[0] = (int16_t)(buff[0] | (buff[1] << 8));   
+  accRaw[1] = (int16_t)(buff[2] | (buff[3] << 8));
+  accRaw[2] = (int16_t)(buff[4] | (buff[5] << 8));
+  
+  // Read magnetometer (LIS3MDL)
+  readFrom(LIS3MDL_ADDRESS, LIS3MDL_OUTX_L, 6, buff);
+  magRaw[0] = (int16_t)(buff[0] | (buff[1] << 8));   
+  magRaw[1] = (int16_t)(buff[2] | (buff[3] << 8));
+  magRaw[2] = (int16_t)(buff[4] | (buff[5] << 8));
+
+  // Read gyroscope (LSM6DSL)
+  readFrom(LSM6DSL_ADDRESS, LSM6DSL_OUTX_L_G, 6, buff);
+  gyrRaw[0] = (int16_t)(buff[0] | (buff[1] << 8));   
+  gyrRaw[1] = (int16_t)(buff[2] | (buff[3] << 8));
+  gyrRaw[2] = (int16_t)(buff[4] | (buff[5] << 8));
+
+  // Convert Gyro raw to degrees per second
+  rate_gyr_x = (float) gyrRaw[0] * G_GAIN;
+  rate_gyr_y = (float) gyrRaw[1] * G_GAIN;
+  rate_gyr_z = (float) gyrRaw[2] * G_GAIN;
+
+  // Calculate angles from gyro
+  gyroXangle += rate_gyr_x * DT;
+  gyroYangle += rate_gyr_y * DT;
+  gyroZangle += rate_gyr_z * DT;
+
+  // Convert Accelerometer values to degrees
+  AccXangle = (float) (atan2(accRaw[1], accRaw[2]) + M_PI) * RAD_TO_DEG;
+  AccYangle = (float) (atan2(accRaw[2], accRaw[0]) + M_PI) * RAD_TO_DEG;
+
+  // Adjust angle offset
+  AccXangle -= (float)180.0;
+  if (AccYangle > 90)
+    AccYangle -= (float)270;
+  else
+    AccYangle += (float)90;
+
+  // Complementary filter
+  CFangleX = AA * (CFangleX + rate_gyr_x * DT) + (1 - AA) * AccXangle;
+  CFangleY = AA * (CFangleY + rate_gyr_y * DT) + (1 - AA) * AccYangle;
+
+  // Compute tilt-uncompensated heading
+  float heading = 180 * atan2(magRaw[1], magRaw[0]) / M_PI;
+  if (heading < 0)
+    heading += 360;
+
+  /*  
+  Serial.print("AccX:\t"); Serial.print(AccXangle);
+  Serial.print("\tAccY:\t"); Serial.print(AccYangle);
+  Serial.print("\tCFangleX:\t"); Serial.print(CFangleX);
+  Serial.print("\tCFangleY:\t"); Serial.print(CFangleY);
+  Serial.print("\tHeading:\t"); Serial.print(heading); 
+  Serial.print("\tLoop Time:\t");
+  */
+
+  /*
+  Serial.print(AccXangle);
+  Serial.print("\t");
+  Serial.print(AccYangle);
+  */
+  
+  // Keep loop rate fixed to DT (20ms)
+  while (millis() - startTime < (DT * 1000)) {
+    delay(1);
+  }
+  Serial.println(millis() - startTime);
+}
+
+void writeTo(int device, byte address, byte val) {
+  Wire.beginTransmission(device);
+  Wire.write(address);
+  Wire.write(val);
+  Wire.endTransmission();
+}
+
+void readFrom(int device, byte address, int num, byte buff[]) {
+  Wire.beginTransmission(device);
+  Wire.write(address);
+  Wire.endTransmission(false); 
+
+  Wire.requestFrom(device, num); 
+  
+  int i = 0;
+  while (Wire.available() && i < num) { 
+    buff[i] = Wire.read();
+    i++;
+  }
+}
