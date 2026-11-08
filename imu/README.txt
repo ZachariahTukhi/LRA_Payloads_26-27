@@ -1,10 +1,7 @@
-there are two parts to the imu right now:
+file explanations:
 
-- sensortest
-- scanner.ino 
+- imu_vibrations_sense.cpp is Zach messing around with filters to try and make our sensor data nicer :) thanks Zach
 
-sensortest can be run in Arduino ide. its from an imu library for the mpu9250 called ivensense. if you want more details pull up the GitHub repo for ivensense.
+- sensortest has the base ivensense 12u code that gets sensor data and exports it in the serial monitor. pretty useful for understanding what the imu reads and what the naming convention of the variables is 
 
-next is scanner.ino. this is part of the base teensy 4.1 library and it checks if there are any i2c devices connected.
-
-scl is connected to 19, sda is 18, then we do ground and 3v. 
+- sensortest/src has our invensense libraries.
